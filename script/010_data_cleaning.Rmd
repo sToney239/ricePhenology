@@ -1,0 +1,53 @@
+---
+title: "data cleaning"
+author: "sToney"
+date: "2023-05-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+source(here::here("script/011_definition.R"))
+```
+
+```{r excel-cleaning}
+clean_excel <- function(rice_type = "早") {
+  yield <- readxl::read_excel(here::here("data/0_basic/rice_yield.xlsx")) %>% 
+  pivot_longer(ends_with("稻"),names_to = "station",values_to = "yield")
+  pre <- readxl::read_excel(here::here("data/0_basic/rice_phenology.xlsx"),
+                            sheet = rice_type) %>% 
+    rename(reverse_name) %>% 
+    mutate(lon = as.numeric(str_replace(lon, ",", ".")),
+           lat = as.numeric(str_replace(lat, ",", ".")))
+  return(list(
+    stations = distinct(pre, station,lon,lat,altitude),
+    phenology = pre %>% 
+      mutate(station = str_c(station,rice_type,"稻")) %>% 
+      mutate(across(seedling:mature,~recode(.,`9999`=NA_real_))) %>% 
+      select(station, year, seedling:mature) %>% 
+      left_join(yield, by = join_by(station, year)) %>% 
+      mutate(station = as.numeric(str_remove(station,paste0(rice_type,"稻"))),
+             period = rice_type)
+  ))
+}
+
+clean_excel_output <- function(res) {
+  map(res, pluck,"stations") %>% 
+    reduce(bind_rows) %>% 
+    distinct() %>% 
+    group_by(station, lon,lat) %>% 
+    summarise(altitude = mean(altitude),.groups = "drop") %>% 
+    write_csv(usethis::proj_path("data/0_basic/station.csv"))
+  map(res,pluck, "phenology") %>% 
+    reduce(bind_rows) %>% 
+    mutate(period = case_when(period=="早"~"early",
+                              period=="中"~"mid",
+                              TRUE~"late")) %>% 
+    write_csv(usethis::proj_path("data/0_basic/phenology.csv"))
+}
+
+
+res <- map(c("早","中","晚"),clean_excel)
+clean_excel_output(res)
+```
+
