@@ -1,0 +1,29 @@
+---
+title: "index calculation"
+author: "sToney"
+date: "2023-05-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+```
+
+```{r gam-imputation}
+source(here::here("script/101_gam_fun.R"))
+
+  
+  
+  
+phenology_transformed <-  phenology_read_transform()
+
+library(furrr)
+plan(multisession, workers = 8)
+phenology_interpolation_res <-  
+  furrr::future_map(2:9, phenology_interpolation,phenology_transformed)
+map_dbl(phenology_interpolation_res, pluck, "rmse") %>% mean()
+
+phenology_interpolation_res %>% 
+  write_gam_output()
+```
+
