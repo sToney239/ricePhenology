@@ -11,9 +11,11 @@ source(here::here("script/011_definition.R"))
 ```
 
 ```{r excel-cleaning}
+# basic phenology data & station data are saved in excel formal
+# this chunk convert excel to csv
 clean_excel <- function(rice_type = "早") {
   yield <- readxl::read_excel(here::here("data/0_basic/rice_yield.xlsx")) %>% 
-  pivot_longer(ends_with("稻"),names_to = "station",values_to = "yield")
+    pivot_longer(ends_with("稻"),names_to = "station",values_to = "yield")
   pre <- readxl::read_excel(here::here("data/0_basic/rice_phenology.xlsx"),
                             sheet = rice_type) %>% 
     rename(reverse_name) %>% 
@@ -37,17 +39,209 @@ clean_excel_output <- function(res) {
     distinct() %>% 
     group_by(station, lon,lat) %>% 
     summarise(altitude = mean(altitude),.groups = "drop") %>% 
-    write_csv(usethis::proj_path("data/0_basic/station.csv"))
+    write_csv(usethis::proj_path("data/0_basic/station_raw.csv"))
   map(res,pluck, "phenology") %>% 
     reduce(bind_rows) %>% 
     mutate(period = case_when(period=="早"~"early",
                               period=="中"~"mid",
                               TRUE~"late")) %>% 
-    write_csv(usethis::proj_path("data/0_basic/phenology.csv"))
+    write_csv(here::here("data/0_basic/phenology_raw.csv"))
+}
+
+#############################################
+res <- map(c("早","中","晚"),clean_excel)
+clean_excel_output(res)
+```
+
+```{r station-climate-repair}
+# some station has no cliamte data
+# use the nearest climate data to repair
+# both station and phenology data should be repaired
+library(sf)
+station <- read_csv(here::here("data/0_basic/station_raw.csv"))
+
+data <- 
+  "C:\\Program Files\\R_scripts\\agri_analysis\\graduate\\raw_data\\weather2020\\SURF_CLI_CHN_MUL_DAY-PRE-13011-198001.TXT" %>%
+  data.table::fread(col.names= name_vec[["pre"]],
+                    select = seq_along(name_vec[["pre"]]))
+
+# get the station not in climate data
+get_station_outlier <- function() {
+  station %>% 
+    anti_join(data %>% 
+                distinct(station_id,lon,lat) %>% 
+                mutate( lon = as.character(as.numeric(lon) / 100),
+                        lat = as.character(as.numeric(lat) / 100)), 
+              by = c("station" = "station_id")) %>% 
+    distinct(station,lon,lat ) %>%
+    st_as_sf(coords = c("lon","lat"),crs = 4326)
+}
+# get all the station position
+get_station_backup <- function() {
+  data %>% 
+    distinct(station_id,lon,lat) %>% 
+    mutate(lon  = lon / 100,
+           lat = lat / 100)%>% 
+    anti_join(station, 
+              by = c("station_id" = "station")) %>%
+    st_as_sf(coords = c("lon","lat"),crs = 4326)
+}
+get_station_nearest <- function(oo_station_sf, backup_station_sf) {
+  oo_station_sf %>% 
+    st_drop_geometry() %>%
+    rename(raw_station = station) %>% 
+    bind_cols(
+      backup_station_sf[st_nearest_feature(oo_station_sf,
+                                           backup_station_sf,
+                                           longlat = TRUE),] %>%
+        st_drop_geometry()
+    )
+}
+get_station_repaired <- function(nearest_ref) {
+  station %>% 
+    left_join(nearest_ref, by = c("station"="raw_station")) %>% 
+    mutate(station_id = if_else(is.na(station_id), station,station_id)) %>% 
+    rename(raw_id = station, station = station_id) %>% 
+    select(station, lon, lat, altitude, raw_id)
+}
+get_phenology_repaired <- function(nearest_ref) {
+  read_csv(here::here("data/0_basic/phenology_raw.csv")) %>% 
+    left_join(nearest_ref, by = c("station"="raw_station")) %>% 
+    mutate(station_id = if_else(is.na(station_id), station,station_id)) %>% 
+    rename(station_raw = station, station = station_id) %>% 
+    relocate(station, .before = 1) %>% 
+    relocate(station_raw, .after = 15)
+}
+
+#############################################
+station_outlier <- get_station_outlier()
+station_backup <- get_station_backup()
+station_nearest <- get_station_nearest(station_outlier, station_backup)
+write_csv(
+  get_station_repaired(station_nearest),
+  here::here("data/0_basic/station.csv")
+)
+write_csv(
+  get_phenology_repaired(station_nearest),
+  here::here("data/0_basic/phenology.csv")
+)
+```
+
+
+```{r climate-data-txt-csv}
+# raw climate data is .txt format
+# this chunk convert txt to csv 
+# to avoid memory error file split into decade to read in
+# saved at here::here("data/0_basic/climate_raw")
+station <- read_csv(here::here("data/0_basic/station.csv"))
+
+decade_path <- function(decade = 1990,type = "TEM") {
+  yearList <- dir(here::here("data/0_basic/weather2020/"),
+                  pattern = paste0("SURF_CLI_CHN_MUL_DAY-",type),
+                  full.names = TRUE) %>% 
+    str_extract(pattern = "-[0-9]*\\.TXT") %>% 
+    str_remove_all("-|\\.TXT") %>% 
+    str_sub(1,4) %>% 
+    as.numeric() 
+  dir(here::here("data/0_basic/weather2020/"),
+      pattern = paste0("SURF_CLI_CHN_MUL_DAY-",type),
+      full.names = TRUE)[yearList%in% (decade-10):(decade-1)]
 }
 
 
-res <- map(c("早","中","晚"),clean_excel)
-clean_excel_output(res)
+read_tem <- function(path) {
+  type = path %>% 
+    str_extract(pattern = "DAY-[A-Z]*-") %>% 
+    str_remove_all("DAY|-") %>% 
+    str_to_lower()
+  path %>% 
+    data.table::fread(col.names= name_vec[[type]],
+                      select = seq_along(name_vec[[type]])) %>% 
+    tidytable::filter(station_id %in% station$station) %>% 
+    tidytable::select(-lon,-lat,-altitude) %>% 
+    rename(station = station_id)
+}
+
+read_raw_weather <- function(decade = 1990) {
+  if(!file.exists(here::here("data/0_basic/climate_raw"))) {
+    dir.create(here::here("data/0_basic/climate_raw"))
+  }
+  tidytable::map_dfr(decade_path(decade,"TEM"), read_tem) %>% 
+    tidytable::left_join(
+      tidytable::map_dfr(decade_path(decade,"PRE"),read_tem),
+      by = c("station","year","month","day")) %>% 
+    tidytable::left_join(
+      tidytable::map_dfr(decade_path(decade,"SSD") ,read_tem),
+      by = c("station","year","month","day")) 
+}
+
+map_dfr(c(1990,2000,2010,2020), read_raw_weather) %>% 
+  write_csv(here::here("data/0_basic/climate_raw.csv"))
+
+
+```
+
+
+```{r climate-extreme-value-impute}
+# raw climate data has some extrodinary extreme value
+# here to replace extreme value to NA 
+# and replace with slider smooth
+
+extreme_to_na <- function(tbl) {
+  tbl %>% 
+    mutate(
+      ave_tem = if_else(ave_tem > 400L, NA_integer_, ave_tem),
+      max_tem = if_else(max_tem > 450L, NA_integer_, max_tem),
+      min_tem = if_else(min_tem > 350L, NA_integer_, min_tem),
+      prec_20_8 = if_else(prec_20_8 > 5000L, NA_integer_, prec_20_8),
+      prec_8_20 = if_else(prec_8_20 > 5000L, NA_integer_, prec_8_20),
+      prec_20_20 = if_else(prec_20_20 > 7000L, NA_integer_, prec_20_20),
+      ssd = if_else(ssd > 160L, NA_integer_, ssd)
+    ) %>% 
+    mutate(date = str_c(year, month, day, sep = "/") %>%
+             lubridate::yday(),.after = year) %>% 
+    select(-month, -day) 
+}
+slider_impute <- function(na_vec, half_window_size = 1L,
+                          complete_coice = FALSE) {
+  if_else(
+    is.na(na_vec),
+    as.integer(slider::slide_mean(na_vec,
+                                  before = half_window_size, 
+                                  after = half_window_size,
+                                  complete = complete_coice,
+                                  na_rm = TRUE)), 
+    na_vec)
+}
+do_the_impute <- function(tbl) {
+  tbl %>% 
+    mutate(calc_ave = as.integer((max_tem + min_tem) / 2),
+           calc_max = as.integer(ave_tem * 2 - min_tem),
+           calc_min = as.integer(ave_tem * 2 - max_tem)) %>% 
+    mutate(
+      ave_tem = if_else(is.na(ave_tem) & !is.na(calc_ave), calc_ave, ave_tem),
+      max_tem = if_else(is.na(max_tem) & !is.na(calc_max), calc_max, max_tem),
+      min_tem = if_else(is.na(min_tem) & !is.na(calc_min), calc_min, min_tem)
+    ) %>% 
+    select(-starts_with("calc")) %>% 
+    mutate(across(ends_with("tem"), \(x) slider_impute(x))) %>% 
+    # filter(is.na(ave_tem) | is.na(max_tem) | is.na(min_tem)) 
+    mutate(across(starts_with("prec"), \(x) slider_impute(x))) %>% 
+    mutate(across(starts_with("prec"), \(x) slider_impute(x,2,TRUE))) %>% 
+    mutate(across(starts_with("prec"), \(x) slider_impute(x,3,TRUE))) %>% 
+    mutate(across(starts_with("prec"), \(x) slider_impute(x,4,TRUE))) %>% 
+    # filter(is.na(prec_20_20) | is.na(prec_20_8) | is.na(prec_8_20)) 
+    mutate(across(ssd, \(x) slider_impute(x))) %>% 
+    mutate(across(ssd, \(x) slider_impute(x,2))) %>% 
+    mutate(across(ssd, \(x) slider_impute(x,3)))
+}
+
+read_csv(here::here("data/0_basic/climate_raw.csv")) %>% 
+  extreme_to_na() %>% 
+  do_the_impute()%>% 
+  distinct() %>% 
+  mutate(year_date = str_c(station,"-",year,"-",date)) %>% 
+  write_csv(here::here("data/0_basic/climate_slide_imputed.csv"))
+
 ```
 

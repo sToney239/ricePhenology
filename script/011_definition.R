@@ -50,3 +50,16 @@ indicator_ref <- tribble(
   "cons_pctl_5_cons_ave_ssd","consecutive_low_sunshine",2,
   "cons_pctl_95_cons_ave_ssd","consecutive_high_sunshine",2
 )
+
+
+name_vec <- list(
+  tem = c("station_id","lat","lon","altitude",
+          "year","month","day",
+          "ave_tem","max_tem","min_tem"),
+  pre = c("station_id","lat","lon","altitude",
+          "year","month","day",
+          "prec_20_8","prec_8_20","prec_20_20"),
+  ssd = c("station_id","lat","lon","altitude",
+          "year","month","day",
+          "ssd")
+)
