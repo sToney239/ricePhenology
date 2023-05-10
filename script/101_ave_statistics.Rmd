@@ -1,0 +1,353 @@
+---
+title: "average statistics"
+author: "sToney"
+date: "2023-05-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(patchwork)
+theme_set(theme_minimal())
+```
+
+
+```{r}
+extreme_per_stage <- read_csv(here::here("data/drought_index.csv")) %>% 
+  mutate(type = factor(type, levels = c("single","early","late"))) 
+
+
+get_wilcoxon_test_res <- function(var_name){
+  early_or_late <- extreme_per_stage %>% 
+    filter(type != "single") %>% 
+    group_split(type)
+  data1 <- early_or_late[[1]] %>% 
+    select(station,type,year,stage,all_of(var_name)) %>% 
+    pivot_wider(names_from = "stage", values_from = var_name)
+  data2 <- early_or_late[[2]] %>% 
+    select(station,type,year,stage,all_of(var_name)) %>% 
+    pivot_wider(names_from = "stage", values_from = var_name)
+  map_dbl(1:10,\(col_num){
+    test_data <- 
+      inner_join(
+        data1 %>% 
+          rename(value_1 = col_num+3 ) %>% 
+          select(station, year, value_1),
+        data2 %>% 
+          rename(value_2 = col_num+3 ) %>% 
+          select(station, year, value_2),
+        by = join_by(station, year)
+      )
+    wilcox.test(
+      test_data$value_1,
+      test_data$value_2,
+      paired = TRUE
+    ) %>% 
+      pluck("p.value")
+  })
+}
+
+
+
+
+get_mw_test_res <- function(var_name) {
+  # Mann–Whitney U Test
+  base_split <- extreme_per_stage %>% 
+    select(station, type, year, stage, all_of(var_name)) %>% 
+    group_split(type) %>% 
+    map(pivot_wider,names_from = "stage", values_from = var_name)
+  
+  p1 <- map_dbl(1:10,\(i){
+    wilcox.test(
+      pull(base_split[[1]], c(str_c("period_",1:9),"overall")[[i]]),
+      pull(base_split[[2]], c(str_c("period_",1:9),"overall")[[i]]),
+      paired = FALSE
+    ) %>% 
+      pluck("p.value")
+  })
+  p2 <- map_dbl(1:10,\(i){ wilcox.test(
+    pull(base_split[[1]], c(str_c("period_",1:9),"overall")[[i]]),
+    pull(base_split[[3]], c(str_c("period_",1:9),"overall")[[i]]),
+    paired = FALSE
+  ) %>% 
+      pluck("p.value")
+  })
+  list(early = p1, late = p2)
+}
+
+wilcoxon_test_res <- 
+  map_dfc(c("freq","intns","prop"), get_wilcoxon_test_res) %>% 
+  set_names(c("freq","intns","prop")) %>% 
+  mutate(stage = c(str_c("period_",1:9),"overall"))
+mw_test_res <- map(c("freq","intns","prop"),get_mw_test_res)
+```
+
+
+
+
+
+```{r}
+generate_sig_table <- function(wilcoxon_test_res, mw_test_res) {
+  sig_table_1 <- wilcoxon_test_res %>% 
+    pivot_longer(freq:prop, names_to = "index", values_to = "p") %>% 
+    mutate(group1 = "early", group2 = "late") %>% 
+    # mutate(value = round(value,2)) %>% 
+    mutate(p_star = case_when(
+      p <= 0.001 ~ "***",
+      p <= 0.01 ~ "**",
+      p <= 0.05 ~ "*",
+      TRUE ~ ""
+    )) %>% 
+    mutate(p = str_c(scales::label_scientific(1)(p), p_star)) %>% 
+    mutate(y.position = case_when(
+      index == "freq" ~ 0.038,
+      index == "intns" ~ 2.56,
+      TRUE ~ 0.0045
+    ))
+  
+  sig_table_2 <- map(mw_test_res,pluck,"early") %>% 
+    reduce(bind_cols) %>% 
+    set_names(c("freq","intns","prop")) %>% 
+    mutate(group1 = "single", group2 = "early") %>% 
+    mutate(stage = c(str_c("period_",1:9),"overall")) %>% 
+    pivot_longer(freq:prop, names_to = "index",values_to = "p") %>% 
+    mutate(p_star = case_when(
+      p <= 0.001 ~ "***",
+      p <= 0.01 ~ "**",
+      p <= 0.05 ~ "*",
+      TRUE ~ ""
+    )) %>% 
+    mutate(p = str_c(scales::label_scientific(1)(p), p_star)) %>% 
+    mutate(y.position = case_when(
+      index == "freq" ~ 0.043,
+      index == "intns" ~ 2.85,
+      TRUE ~ 0.0051
+    ))
+  
+  
+  sig_table_3 <- map(mw_test_res,pluck,"late") %>% 
+    reduce(bind_cols) %>% 
+    set_names(c("freq","intns","prop")) %>% 
+    mutate(group1 = "single", group2 = "late") %>% 
+    mutate(stage = c(str_c("period_",1:9),"overall")) %>% 
+    pivot_longer(freq:prop, names_to = "index",values_to = "p") %>% 
+    mutate(p_star = case_when(
+      p <= 0.001 ~ "***",
+      p <= 0.01 ~ "**",
+      p <= 0.05 ~ "*",
+      TRUE ~ ""
+    )) %>% 
+    mutate(p = str_c(scales::label_scientific(1)(p), p_star)) %>% 
+    mutate(y.position = case_when(
+      index == "freq" ~ 0.048,
+      index == "intns" ~ 3.14,
+      TRUE ~ 0.0057
+    ))
+  return(
+    list(
+      sig_table_1 = sig_table_1,
+      sig_table_2 = sig_table_2,
+      sig_table_3 = sig_table_3
+    )
+  )
+}
+generate_sig_table(wilcoxon_test_res,mw_test_res) %>% attach()
+```
+
+```{r}
+```{r}
+index_dict <- c("freq" = "Frequency","intns" = "Intensity", "prop" = "Proportion")
+extend_limits <- tribble(
+  ~index, ~ value, ~ type,
+  "freq", 0.053, "single",
+  "intns", 3.35, "early",
+  "prop", 0.008, "late"
+)
+
+label_tibble <- 
+  crossing(
+    index = factor(c("freq","intns","prop") , levels = c("freq","intns","prop") ),
+    stage = factor(c("overall",paste0("period_",1:9)),levels = c("overall",paste0("period_",1:9)))
+  ) %>% 
+  mutate(label = paste0("(",1:30,")"))
+panel_names <- c("Frequency","Intensity","Proportion","Overall",
+                 paste0("Period ",1:9)) %>% 
+  set_names(c('freq','intns','prop',"overall",paste0("period_",1:9)))
+panel_names_ch <- c("频率","强度","占比","整体",
+                    paste0("阶段",1:9)) %>% 
+  set_names(c('freq','intns','prop',"overall",paste0("period_",1:9)))
+boxplot_summarised_group <- extreme_per_stage %>% 
+  pivot_longer(freq:prop, names_to = "index") %>% 
+  group_by(type, index, stage) 
+boxplot_data <- boxplot_summarised_group %>% 
+  group_keys() %>% 
+  bind_cols(
+    boxplot_summarised_group %>% 
+      group_split() %>% 
+      map_dfc(
+        ~boxplot.stats(.$value, do.conf = FALSE, do.out = FALSE)$stats
+        ) %>% 
+      t() %>% 
+      as_tibble() %>% 
+      rename(lower = V1, pctl_25 = V2, pctl_50 = V3, pctl_75 = V4, upper = V5)) 
+
+```
+```
+
+
+```{r}
+violin_plot_data <-  extreme_per_stage %>% 
+  pivot_longer(freq:prop, names_to = "index") %>% 
+  left_join(boxplot_data, by = c("type","index","stage")) %>% 
+  filter(value < upper)
+sig_table_11 <- sig_table_1 %>% 
+  mutate(y.position = if_else(index == "prop",sqrt(y.position)+0.003,y.position))
+sig_table_22 <- sig_table_2 %>% 
+  mutate(y.position = if_else(index == "prop",sqrt(y.position)+0.006,y.position))
+sig_table_33 <- sig_table_3 %>% 
+  mutate(y.position = if_else(index == "prop",sqrt(y.position)+0.009,y.position))
+
+
+
+box_violin_plot <- function(index_type = "freq") {
+  boxplot_data %>% 
+    filter(index == index_type) %>% 
+    ggplot()+
+    geom_errorbar(aes(type, ymin = lower, ymax = upper), width = 0.8)+
+    geom_boxplot(
+      aes(type, middle = pctl_50,
+          upper = pctl_75,lower = pctl_25,
+          ymax = pctl_75, ymin = pctl_25,
+          fill = type),
+      stat = "identity")+
+    ggpubr::stat_pvalue_manual(
+      filter(sig_table_11,index == index_type), size = 7,
+      tip.length = ifelse(index_type == "prop",0.01,0.03))+
+    ggpubr::stat_pvalue_manual(
+      filter(sig_table_22,index == index_type),size = 7,
+      tip.length = ifelse(index_type == "prop",0.01,0.03))+
+    ggpubr::stat_pvalue_manual(
+      filter(sig_table_33,index == index_type),size = 7,
+      tip.length = ifelse(index_type == "prop",0.01,0.03))+
+    geom_text(
+      aes(x = -Inf, y = Inf, label = label),
+      data = filter(label_tibble,index == index_type),
+      size = 6,
+      hjust = -0.2,
+      vjust = 1.3,
+      inherit.aes = FALSE)+
+    facet_wrap(vars(stage), strip.position = "bottom",
+               nrow = 1,labeller = as_labeller(panel_names))+
+    geom_point(data = filter(extend_limits,index == index_type), 
+               aes(type, value),color = NA)+
+    ggthemes::scale_fill_tableau(labels = paste0(c("Early","Single","Late"),
+                                                 " Rice"))+
+    scale_x_discrete(NULL, labels = NULL)+
+    labs(x = "", y = panel_names[index_type], fill = "")+
+    theme_bw()+
+    {if (index_type != "prop") theme(strip.text = element_blank())}+
+    theme(axis.ticks.x = element_blank(),
+          legend.position = "bottom",
+          axis.title.y.left = element_text(angle = 0,vjust = 0.5,size = 30),
+          strip.background =element_rect(fill="white",color = "white"),
+          text = element_text(family = "serif",size = 40))
+}
+p1 <- box_violin_plot("freq")+
+  scale_y_continuous(expand = c(0,0), labels = scales::label_percent())
+p2 <- box_violin_plot("intns")+
+  scale_y_continuous(expand = c(0,0))
+p3 <- box_violin_plot("prop")+
+  scale_y_continuous(expand = c(0,0), 
+                     labels = scales::label_percent(),
+                     trans = scales::sqrt_trans())
+
+p <- p1/p2/p3+
+  plot_layout(guides = "collect") &
+  theme(legend.position='bottom',
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-10,-10,-10,-10),
+        legend.text = element_text(size = 35),
+        legend.key.size = unit(1, 'cm'))
+
+ggsave(here::here("plot/01EDA_comaprison_en.jpg"),width = 10,height = 6.5, dpi = 300)
+
+```
+
+```{r}
+sig_table_111 <- sig_table_11 %>% 
+  select(-p) %>% rename(p = p_star)
+sig_table_222 <- sig_table_22 %>% 
+  select(-p) %>% rename(p = p_star)
+sig_table_333 <- sig_table_33 %>% 
+  select(-p) %>% rename(p = p_star)
+box_violin_plot <- function(index_type = "freq") {
+  boxplot_data %>% 
+    filter(index == index_type) %>% 
+    ggplot()+
+    # geom_errorbar(aes(type, ymin = ave*0.9,ymax= ave+std))+
+    geom_errorbar(aes(type, ymin = lower, ymax = upper), width = 0.8)+
+    # gghalves::geom_half_boxplot(
+    geom_boxplot(
+      aes(type, middle = pctl_50,
+          upper = pctl_75,lower = pctl_25,
+          ymax = pctl_75, ymin = pctl_25,
+          # ymax = upper, ymin = lower,
+          fill = type),
+      stat = "identity")+
+    ggpubr::stat_pvalue_manual(
+      filter(sig_table_111,index == index_type),size = 15,
+                               tip.length = ifelse(index_type == "prop",0.01,0.03))+
+    ggpubr::stat_pvalue_manual(
+      filter(sig_table_222,index == index_type),size = 15,
+                               tip.length = ifelse(index_type == "prop",0.01,0.03))+
+    ggpubr::stat_pvalue_manual(
+      filter(sig_table_333,index == index_type),size = 15,
+                               tip.length = ifelse(index_type == "prop",0.01,0.03))+
+    geom_text(aes(x = -Inf, y = Inf, label = label),
+              data = filter(label_tibble,index == index_type),
+              size = 7,
+              hjust = -0.2,
+              vjust = 1.3,
+              inherit.aes = FALSE)+
+    facet_wrap(vars(stage), strip.position = "bottom",
+               nrow = 1,labeller = as_labeller(panel_names_ch))+
+    geom_point(data = filter(extend_limits,index == index_type), aes(type, value),color = NA)+
+    ggthemes::scale_fill_tableau(labels = paste0(c("早","中","晚"),"稻"))+
+    scale_x_discrete(NULL, labels = NULL)+
+    labs(x = "", y = panel_names_ch[index_type], fill = "")+
+    theme_bw()+
+    {if (index_type != "prop") theme(strip.text = element_blank())}+
+    theme(axis.ticks.x = element_blank(),
+          axis.text.y.left  = element_text(family = "serif",size=30),
+          axis.text.x  = element_text(family = "serif",size=30),
+          # legend.position = "bottom",
+          axis.title.y.left = element_text(angle = 0,vjust = 0.5),
+          strip.background =element_rect(fill="white",color = "white"),
+          text = element_text(family = "SyHei",size=40))
+}
+p1 <- box_violin_plot("freq")+
+  scale_y_continuous(expand = c(0,0), labels = scales::label_percent())
+p2 <- box_violin_plot("intns")+
+  scale_y_continuous(expand = c(0,0))
+p3 <- box_violin_plot("prop")+
+  scale_y_continuous(expand = c(0,0), 
+                     labels = scales::label_percent(),
+                     trans = scales::sqrt_trans())
+library(patchwork)
+library(showtext)
+p <- p1/p2/p3+
+  plot_layout(guides = "collect") &
+  theme(legend.position='bottom',text = element_text(family = "SyHei"),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-10,-10,-10,-10),
+        legend.text = element_text(size = 35),
+        legend.key.size = unit(1, 'cm'))
+
+font_add("SyHei", "C:\\Users\\sToney\\AppData\\Local\\Microsoft\\Windows\\Fonts\\SourceHanSerifSC-Regular.otf")
+showtext_auto()
+ggsave(here::here("plot/01EDA_comaprison_ch.png"),
+       plot = p,
+       width = 10,height = 6, dpi = 300,
+       device=ragg::agg_png)
+```
+

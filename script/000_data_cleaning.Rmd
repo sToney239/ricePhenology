@@ -14,9 +14,9 @@ source(here::here("script/001_definition.R"))
 # basic phenology data & station data are saved in excel formal
 # this chunk convert excel to csv
 clean_excel <- function(rice_type = "早") {
-  yield <- readxl::read_excel(here::here("data/0_basic/rice_yield.xlsx")) %>% 
+  yield <- readxl::read_excel(here::here("data/rice_yield.xlsx")) %>% 
     pivot_longer(ends_with("稻"),names_to = "station",values_to = "yield")
-  pre <- readxl::read_excel(here::here("data/0_basic/rice_phenology.xlsx"),
+  pre <- readxl::read_excel(here::here("data/rice_phenology.xlsx"),
                             sheet = rice_type) %>% 
     rename(reverse_name) %>% 
     mutate(lon = as.numeric(str_replace(lon, ",", ".")),
@@ -121,11 +121,11 @@ station_backup <- get_station_backup()
 station_nearest <- get_station_nearest(station_outlier, station_backup)
 write_csv(
   get_station_repaired(station_nearest),
-  here::here("data/0_basic/station.csv")
+  here::here("data/station.csv")
 )
 write_csv(
   get_phenology_repaired(station_nearest),
-  here::here("data/0_basic/phenology.csv")
+  here::here("data/phenology.csv")
 )
 ```
 
@@ -134,18 +134,18 @@ write_csv(
 # raw climate data is .txt format
 # this chunk convert txt to csv 
 # to avoid memory error file split into decade to read in
-# saved at here::here("data/0_basic/climate_raw")
-station <- read_csv(here::here("data/0_basic/station.csv"))
+# saved at here::here("data/climate_raw")
+station <- read_csv(here::here("data/station.csv"))
 
 decade_path <- function(decade = 1990,type = "TEM") {
-  yearList <- dir(here::here("data/0_basic/weather2020/"),
+  yearList <- dir(here::here("data/weather2020/"),
                   pattern = paste0("SURF_CLI_CHN_MUL_DAY-",type),
                   full.names = TRUE) %>% 
     str_extract(pattern = "-[0-9]*\\.TXT") %>% 
     str_remove_all("-|\\.TXT") %>% 
     str_sub(1,4) %>% 
     as.numeric() 
-  dir(here::here("data/0_basic/weather2020/"),
+  dir(here::here("data/weather2020/"),
       pattern = paste0("SURF_CLI_CHN_MUL_DAY-",type),
       full.names = TRUE)[yearList%in% (decade-10):(decade-1)]
 }
@@ -165,8 +165,8 @@ read_tem <- function(path) {
 }
 
 read_raw_weather <- function(decade = 1990) {
-  if(!file.exists(here::here("data/0_basic/climate_raw"))) {
-    dir.create(here::here("data/0_basic/climate_raw"))
+  if(!file.exists(here::here("data/climate_raw"))) {
+    dir.create(here::here("data/climate_raw"))
   }
   tidytable::map_dfr(decade_path(decade,"TEM"), read_tem) %>% 
     tidytable::left_join(
@@ -237,12 +237,12 @@ do_the_impute <- function(tbl) {
     mutate(across(ssd, \(x) slider_impute(x,3)))
 }
 
-raw_climate %>% read_csv(here::here("data/0_basic/climate_raw.csv")) %>% 
+raw_climate %>% read_csv(here::here("data/climate_raw.csv")) %>% 
   extreme_to_na() %>% 
   do_the_impute()%>% 
   distinct() %>% 
   mutate(year_date = str_c(station,"-",year,"-",date)) %>% 
-  write_csv(here::here("data/0_basic/climate_slide_imputed.csv"))
+  write_csv(here::here("data/climate_slide_imputed.csv"))
 
 ```
 

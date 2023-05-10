@@ -9,7 +9,7 @@ output: html_document
 library(tidyverse)
 ```
 
-```{r gam-imputation}
+```{r gam-imputation,warning=FALSE}
 source(here::here("script/101_gam_fun.R"))
 
 phenology_transformed <-  phenology_read_transform()
@@ -28,8 +28,223 @@ phenology_interpolation_res %>%
 ```
 
 
-```{r}
+```{r, warning=FALSE}
 station <- read_csv(usethis::proj_path("data/station.csv"))
 phenology <- read_csv(here::here("data/phenology_interpolation.csv"))
+
+day_temp_interpolate <- function() {
+  climate_data <- 
+    usethis::proj_path("data/climate_slide_imputed.csv") %>% 
+    data.table::fread()
+  station_date_filter <- phenology %>% 
+    group_by(station) %>%
+    summarise(min_start = min(seedling,na.rm = TRUE),
+              max_end = max(mature,na.rm = TRUE)) %>% 
+    mutate(min_start = min_start-15, 
+           max_end = max_end +15) %>% 
+    mutate(date = map2(min_start,max_end, ~.x:.y)) %>% 
+    select(-min_start,-max_end) %>% 
+    unnest(cols = c(date))
+  
+  base_filter <- climate_data %>% 
+    semi_join(station_date_filter, by = c("station", "date")) %>% 
+    select(-starts_with("prec"),-ssd, -ave_tem) %>% 
+    rename(Tmax = max_tem, Tmin = min_tem, 
+           JDay = date,
+           Year = year) %>% 
+    mutate(Tmax = Tmax / 10, Tmin = Tmin / 10) %>% 
+    distinct() %>% 
+    group_split(station)
+  latitude_vec <- station %>% 
+    left_join(
+      tibble(station  = map_dbl(base_filter,~pluck(.$station,1)),
+             id = 1:length(station)),
+      by = join_by(station)
+    ) %>% 
+    arrange(id) %>% 
+    pull(lat)
+  
+  # about 20 sec
+  map2(
+    base_filter,
+    latitude_vec,
+    ~chillR::stack_hourly_temps(.x, latitude=.y)
+  ) %>% 
+    map_dfr(pluck,"hourtemps")
+}
+
+day_temp_interpolate() %>% 
+  janitor::clean_names() %>% 
+  rename(date = j_day) %>% 
+  data.table::fwrite(here::here("data/hourly_temp.csv"))
 ```
+
+
+```{r}
+climate_data <- 
+  usethis::proj_path("data/climate_slide_imputed.csv") %>% 
+  read_csv() %>% 
+  transmute(station, year,date, max_tem = max_tem / 10)
+station <- usethis::proj_path("data/station.csv") %>% 
+  read_csv()
+phenology <- read_csv(here::here("data/phenology_interpolation.csv")) %>% 
+  na.omit() %>% 
+  filter(year < 2018)
+
+hourly_temp <- read_csv(here::here("data/hourly_temp.csv")) %>% 
+  select(-tmax,-tmin)
+phenology_level <- c("seedling", "emergence" ,"3-leaf" ,
+                     "transplanting","regreening", "tillering", 
+                     "boot", "heading", "milk", "mature")
+
+batch_drought_index <- function(i) {
+  start_phenology <-phenology_level[i]
+  end_phenology <-phenology_level[i+1]
+  
+  
+  date_range <- function(start_phenology = "seedling",
+                         end_phenology = "emergence",
+                         extend_day_length = 0){
+    phenology  %>% 
+      group_by(station, period) %>% 
+      mutate(start = min(.data[[start_phenology]])-extend_day_length, 
+             end = max(.data[[end_phenology]])+extend_day_length) %>% 
+      ungroup() %>% 
+      select(station, year, period, start, end) %>% 
+      mutate(date = map2(start, end, ~ .x:.y)) %>% 
+      select(-start, -end) %>% 
+      unnest(date)
+  }
+  
+  extent_date <-  date_range(start_phenology,
+                             end_phenology,
+                             extend_day_length = 7) %>% 
+    group_split(station, period)
+  actual_date <-  date_range(start_phenology,
+                             end_phenology,
+                             extend_day_length = 0) %>% 
+    group_split(station, period)
+  
+  # Frequency:  hours / total
+  # total_EDD: EDD
+  # Extreme Growing Days (EDD) https://doi.org/10.1038/s41467-022-33265-1
+  # Intensity:  (mean_EDD - mean_GDD) / mean_GDD
+  # Proportion: EDD / GDD
+  # total edd, edd/gdd, total hour, total hour / total hour
+  index_summarise <- function(extent_date,actual_date) {
+    heat_standard <- climate_data %>% 
+      semi_join(extent_date , by = c("station","year","date")) %>% 
+      pull(max_tem) %>% 
+      quantile(0.95)
+    
+    actual_date %>% 
+      left_join(
+        hourly_temp %>% 
+          semi_join(extent_date , by = c("station","year","date")) %>% 
+          # filter(hour >=6, hour <= 18) %>% 
+          mutate(extreme = temp > heat_standard) %>% 
+          filter(temp > 10) %>% 
+          group_by(station,year, date) %>% 
+          summarise(
+            edd = if_else(extreme, temp-heat_standard, 0) %>% sum,
+            gdd = if_else(extreme, heat_standard - 10, temp - 10) %>% sum,
+            n_edd = sum(extreme),
+            n_gdd = n(),
+            .groups = "drop"
+          ) %>% 
+          semi_join(actual_date, by = c("station","year","date")),
+        by = c("station", "year", "date")
+      ) %>% 
+      # mutate(across(edd:extreme_days, ~replace_na(.,0))) %>% 
+      group_by(station, period, year) %>% 
+      summarise(
+        edd = sum(edd,na.rm = TRUE),
+        gdd = sum(gdd, na.rm = TRUE),
+        n_edd = sum(n_edd, na.rm = TRUE),
+        n_gdd = sum(n_gdd, na.rm = TRUE),
+        total_days =  n(),
+        .groups = "drop"
+      ) 
+    
+  }
+  
+  future::plan(future::multisession, workers = 7)
+  furrr::future_map2_dfr(extent_date, actual_date, index_summarise,
+                                .progress = FALSE)
+}
+
+# about 7.5 minutes
+res <- map(1:9,batch_drought_index,.progress = TRUE)
+write_rds(res, here::here("data/drought_index_per_phenology.rds"))
+
+```
+
+
+```{r}
+per_index <- read_rds(here::here("data/drought_index_per_phenology.rds"))
+total_summarise <- map(1:9,\(i){
+  per_index[[i]] %>% 
+    set_names(c("station","period","year",
+                str_c(c("edd","gdd","n_edd","n_gdd","total_days"),"_",i)))
+}) %>% 
+  reduce(dplyr::left_join, by = join_by(station, period, year)) %>% 
+  rowwise() %>% 
+  transmute(
+    station, period, year,
+    edd = sum(c_across(starts_with("edd_"))),
+    gdd = sum(c_across(starts_with("gdd_"))),
+    n_edd = sum(c_across(starts_with("n_edd_"))),
+    n_gdd = sum(c_across(starts_with("n_gdd_"))),
+    total_days = sum(c_across(starts_with("total_days_")))
+  ) %>% 
+  mutate(
+    freq = n_edd / n_gdd,
+    intns = if_else(edd==0,0, edd/n_edd),
+    prop =  edd / gdd
+  )
+
+tt <- function(var_name) {
+  tt <- map(1:9, \(i){
+    per_index[[i]] %>% 
+      transmute(
+        station, period, year,
+        edd, gdd,
+        freq = n_edd / n_gdd,
+        intns = if_else(edd==0,0, edd/n_edd),
+        prop =  edd / gdd
+      ) %>% 
+      select(station, period, year, {{var_name}})
+  }) %>% 
+    reduce(dplyr::left_join, by = c("station", "period", "year")) %>% 
+    set_names(c("station", "period", "year", paste0("period_",1:9)))
+}
+
+
+freq_data <- tt(freq) %>% 
+  bind_cols(overall = total_summarise$freq)
+intns_data <- tt(intns) %>% 
+  bind_cols(overall = total_summarise$intns)
+prop_data <- tt(prop)%>% 
+  bind_cols(overall = total_summarise$prop)
+
+extreme_per_stage <- freq_data %>% 
+  pivot_longer(c(starts_with("period_"),overall), names_to = "stage", values_to = "freq") %>% 
+  left_join(
+    intns_data %>% 
+      pivot_longer(c(starts_with("period_"),overall), names_to = "stage", values_to = "intns"),
+    by = c("station","year","period","stage")
+  ) %>% 
+  left_join(
+    prop_data %>% 
+      pivot_longer(c(starts_with("period_"),overall), names_to = "stage", values_to = "prop"),
+    by = c("station","year","period","stage")
+  ) %>% 
+  mutate(period = if_else(period == "mid","single", period)) %>% 
+  mutate(period = factor(period, levels = c("single","early","late"))) %>% 
+  rename(type = period)
+
+extreme_per_stage %>% 
+  write_csv(here::here("data/drought_index.csv"))
+```
+
 
