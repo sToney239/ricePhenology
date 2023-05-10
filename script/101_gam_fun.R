@@ -45,18 +45,14 @@ phenology_interpolation <- function(i, phenology) {
 }
 
 
-write_gam_output <- function(phenology_interpolation_res) {
-  if(!file.exists(here::here("data/1_index"))) {
-    dir.create(here::here("data/1_index"))
-  }
+gam_output_reduce <- function(phenology_interpolation_res) {
   phenology %>% 
     select(-c(emergence:milk)) %>% 
     bind_cols(
       map_dfc(phenology_interpolation_res, pluck, "interpolation") %>% 
         set_names(phenology_level[2:9])
     ) %>% 
-    relocate(emergence:milk, .before = mature) %>% 
-    write_csv(here::here("data/1_index/phenology_interpolation.csv"))
+    relocate(emergence:milk, .before = mature) 
 }
 
 phenology_read_transform <- function() {

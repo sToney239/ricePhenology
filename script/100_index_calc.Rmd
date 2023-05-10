@@ -18,9 +18,18 @@ library(furrr)
 plan(multisession, workers = 8)
 phenology_interpolation_res <-  
   furrr::future_map(2:9, phenology_interpolation,phenology_transformed)
+
+# check rmse
 map_dbl(phenology_interpolation_res, pluck, "rmse") %>% mean()
 
 phenology_interpolation_res %>% 
-  write_gam_output()
+  gam_output_reduce() %>% 
+  write_csv(here::here("data/phenology_interpolation.csv"))
+```
+
+
+```{r}
+station <- read_csv(usethis::proj_path("data/station.csv"))
+phenology <- read_csv(here::here("data/phenology_interpolation.csv"))
 ```
 
