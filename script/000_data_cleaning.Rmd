@@ -10,7 +10,7 @@ library(tidyverse)
 source(here::here("script/001_definition.R"))
 ```
 
-```{r excel-cleaning}
+```{r excel-cleaning-function}
 # basic phenology data & station data are saved in excel formal
 # this chunk convert excel to csv
 clean_excel <- function(rice_type = "早") {
@@ -33,32 +33,27 @@ clean_excel <- function(rice_type = "早") {
   ))
 }
 
-clean_excel_output <- function(res) {
+clean_excel_station <- function(res) {
   map(res, pluck,"stations") %>% 
     reduce(bind_rows) %>% 
     distinct() %>% 
     group_by(station, lon,lat) %>% 
-    summarise(altitude = mean(altitude),.groups = "drop") %>% 
-    write_csv(usethis::proj_path("data/0_basic/station_raw.csv"))
-  map(res,pluck, "phenology") %>% 
+    summarise(altitude = mean(altitude),.groups = "drop") 
+}
+
+clean_excel_phenology <- function() {
+    map(res,pluck, "phenology") %>% 
     reduce(bind_rows) %>% 
     mutate(period = case_when(period=="早"~"early",
                               period=="中"~"mid",
-                              TRUE~"late")) %>% 
-    write_csv(here::here("data/0_basic/phenology_raw.csv"))
+                              TRUE~"late")) 
 }
-
 #############################################
-res <- map(c("早","中","晚"),clean_excel)
-clean_excel_output(res)
-```
 
-```{r station-climate-repair}
 # some station has no cliamte data
 # use the nearest climate data to repair
 # both station and phenology data should be repaired
 library(sf)
-station <- read_csv(here::here("data/0_basic/station_raw.csv"))
 
 data <- 
   "C:\\Program Files\\R_scripts\\agri_analysis\\graduate\\raw_data\\weather2020\\SURF_CLI_CHN_MUL_DAY-PRE-13011-198001.TXT" %>%
@@ -105,7 +100,7 @@ get_station_repaired <- function(nearest_ref) {
     select(station, lon, lat, altitude, raw_id)
 }
 get_phenology_repaired <- function(nearest_ref) {
-  read_csv(here::here("data/0_basic/phenology_raw.csv")) %>% 
+  phenology %>% 
     left_join(nearest_ref, by = c("station"="raw_station")) %>% 
     mutate(station_id = if_else(is.na(station_id), station,station_id)) %>% 
     rename(station_raw = station, station = station_id) %>% 
@@ -114,6 +109,13 @@ get_phenology_repaired <- function(nearest_ref) {
 }
 
 #############################################
+```
+
+
+```{r excel-cleaning-execute}
+res <- map(c("早","中","晚"),clean_excel)
+station <- clean_excel_station(res)
+phenology <- clean_excel_phenology(res)
 station_outlier <- get_station_outlier()
 station_backup <- get_station_backup()
 station_nearest <- get_station_nearest(station_outlier, station_backup)
@@ -175,9 +177,8 @@ read_raw_weather <- function(decade = 1990) {
       by = c("station","year","month","day")) 
 }
 
-map_dfr(c(1990,2000,2010,2020), read_raw_weather) %>% 
-  write_csv(here::here("data/0_basic/climate_raw.csv"))
 
+raw_climate <- map_dfr(c(1990,2000,2010,2020), read_raw_weather)
 
 ```
 
@@ -236,7 +237,7 @@ do_the_impute <- function(tbl) {
     mutate(across(ssd, \(x) slider_impute(x,3)))
 }
 
-read_csv(here::here("data/0_basic/climate_raw.csv")) %>% 
+raw_climate %>% read_csv(here::here("data/0_basic/climate_raw.csv")) %>% 
   extreme_to_na() %>% 
   do_the_impute()%>% 
   distinct() %>% 

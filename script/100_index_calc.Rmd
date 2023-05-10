@@ -12,9 +12,6 @@ library(tidyverse)
 ```{r gam-imputation}
 source(here::here("script/101_gam_fun.R"))
 
-  
-  
-  
 phenology_transformed <-  phenology_read_transform()
 
 library(furrr)
