@@ -237,11 +237,11 @@ do_the_impute <- function(tbl) {
     mutate(across(ssd, \(x) slider_impute(x,3)))
 }
 
-raw_climate %>% read_csv(here::here("data/climate_raw.csv")) %>% 
+raw_climate %>% 
   extreme_to_na() %>% 
-  do_the_impute()%>% 
-  distinct() %>% 
-  mutate(year_date = str_c(station,"-",year,"-",date)) %>% 
+  do_the_impute()
+  distinct() %>%
+  # mutate(year_date = str_c(station,"-",year,"-",date)) %>%
   write_csv(here::here("data/climate_slide_imputed.csv"))
 
 ```

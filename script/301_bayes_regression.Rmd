@@ -1,0 +1,28 @@
+---
+title: "bayes regression"
+author: "sToney"
+date: "2023-05-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(brms)
+```
+
+
+```{r}
+extreme_per_stage_raw <- read_csv(here::here("data/drought_index.csv")) %>% 
+  mutate(type = recode(type,"single"="mid") %>% 
+           factor(levels = c("mid","early","late"))) 
+
+temp_raw <-  read_csv(here::here("data/drought_index_whole_season.csv")) %>% 
+  select(station, year, type = period, yield, total_days, prec, ssd, gdd) 
+
+
+# pctl_quantile <- \(x) {
+#   if_else( x > quantile(x,0.9), 10, x/quantile(x,0.9)*10 )
+# } 
+pctl_quantile <- \(x) {x/max(x)*10}
+```
+

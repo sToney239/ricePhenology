@@ -12,7 +12,9 @@ library(tidyverse)
 ```{r gam-imputation,warning=FALSE}
 source(here::here("script/101_gam_fun.R"))
 
-phenology_transformed <-  phenology_read_transform()
+phenology_transformed <- 
+  read_csv(here::here("data/phenology.csv")) %>% 
+  phenology_transform()
 
 library(furrr)
 plan(multisession, workers = 8)
@@ -25,6 +27,7 @@ map_dbl(phenology_interpolation_res, pluck, "rmse") %>% mean()
 phenology_interpolation_res %>% 
   gam_output_reduce() %>% 
   write_csv(here::here("data/phenology_interpolation.csv"))
+
 ```
 
 
@@ -247,4 +250,62 @@ extreme_per_stage %>%
   write_csv(here::here("data/drought_index.csv"))
 ```
 
+```{r}
+phenology <- read_csv(here::here("data/phenology_interpolation.csv")) %>% 
+  na.omit() %>% 
+  filter(year < 2018)
 
+
+phenology_date_tbl <- phenology %>% 
+  select(station, year, seedling,mature) %>% 
+  mutate(date = map2(seedling, mature, ~.x:.y)) %>% 
+  unnest() %>% 
+  select(-seedling,-mature) %>% 
+  distinct(station, year, date)
+
+
+climate_data <- usethis::proj_path("data/climate_slide_imputed.csv") %>% 
+  read_csv() %>% 
+  select(-ends_with("tem"),-prec_20_8,-prec_8_20) %>% 
+  semi_join(select(phenology_date_tbl,station,year,date), 
+            by = c("station","year","date"))
+
+
+phenology_date_tbl_2 <- phenology %>% 
+  select(station, year, period,seedling,mature) %>% 
+  mutate(date = map2(seedling, mature, ~.x:.y)) %>% 
+  unnest(cols = c(date)) %>% 
+  select(-seedling,-mature) %>% 
+  dplyr::group_by(station, year, period)
+
+
+# about 30 sec
+## future::plan(future::multisession,workers = 7)
+prec <- phenology_date_tbl_2 %>% 
+  dplyr::group_split() %>% 
+  map(
+    \(x) {
+      climate_data %>% 
+        semi_join(x, by = c("station","year","date")) %>% 
+        summarise(total_days = n(), prec=sum(prec_20_20), ssd = sum(ssd),
+                  .groups = "drop")
+    }
+  ) %>% 
+  list_rbind()
+
+res <- dplyr::group_keys(phenology_date_tbl_2) %>% 
+  bind_cols(prec) %>% 
+  left_join(total_summarise,
+            by = join_by(station, year, period)) %>% 
+  left_join(
+    phenology %>% 
+      select(station, year, period, yield),
+    by = c("station","year","period")
+  ) %>% 
+  select(-total_days.y) %>% 
+  rename(total_days = total_days.x) %>% 
+  relocate(yield,.before = total_days) %>% 
+  na.omit()
+res %>%
+  write_csv(here::here("data/drought_index_whole_season.csv"))
+```

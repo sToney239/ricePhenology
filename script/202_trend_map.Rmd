@@ -1,0 +1,203 @@
+---
+title: "trend map"
+author: "sToney"
+date: "2023-05-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(sf)
+library(patchwork)
+theme_set(theme_minimal())
+```
+
+```{r}
+extreme_per_stage <- 
+  # read_csv(here::here("data/drought_index.csv")) %>% 
+  read_csv("C:\\Program Files\\R_scripts\\agri_analysis\\graduate\\data\\drought_index.csv") %>% 
+  mutate(type = factor(type, levels = c("single","early","late"))) 
+
+library(sf)
+station <- read_csv(here::here("data/station.csv")) %>% 
+  st_as_sf(coords = c("lon","lat"), crs = 4326) %>% 
+  st_transform(classicChinaMap::shared_crs) %>% 
+  bind_cols(st_coordinates(.)) %>% 
+  st_drop_geometry()
+
+long_tbl2 <- extreme_per_stage  %>% 
+  select(station, type, year, stage, freq, intns, prop) %>% 
+  filter(stage == "overall") %>% 
+  select(-stage) %>% 
+  pivot_longer(freq:prop, names_to = "index") %>% 
+  group_by(station, type, index) 
+minmax <- \(x) {max(x)-min(x)}
+res2 <- group_keys(long_tbl2) %>% 
+  bind_cols(
+    long_tbl2 %>% 
+      group_split() %>% 
+      map_dfr(\(tbl){
+        mk_test_1 <- tbl %>% pull(value) %>% modifiedmk::tfpwmk()
+        tibble(p_value = mk_test_1[["P-value"]],
+               slope = mk_test_1[["Sen's Slope"]],
+               minmax = minmax(tbl %>% pull(value))
+        )
+      })
+  )%>% 
+  mutate(significance = if_else(p_value < 0.05, TRUE, FALSE))  %>% 
+  mutate(pct_slope = slope  / minmax)%>%  # not multiply 10
+  left_join(station, by = "station")
+
+label_tbl <- crossing(
+  type = c("freq","intns","prop"),
+  period = factor(c("single","early","late"),
+                  levels = c("single","early","late"))) %>% 
+  mutate(id = 1:9, id = paste0("(",id,")")) %>% 
+  pivot_wider(names_from = "period", values_from = "id") %>% 
+  column_to_rownames(var = "type")
+```
+
+
+```{r}
+whole_map_range <- list(
+  ylim = c(-1043564, 417510),
+  xlim = c(-1304054 , 917510)) 
+sub_map_range <- list(
+  ylim = c(1306915,1894565),
+  xlim = c(1173677, 1609149)
+)
+asp2 <- 
+  (sub_map_range$xlim[[2]] - sub_map_range$xlim[[1]])/
+  (sub_map_range$ylim[[2]] - sub_map_range$ylim[[1]])
+
+w <-  0.3 
+h <- w / asp2
+
+type_labbeller_reset <- 
+  c("Frequency","Intensity","Proportion") %>% 
+  set_names(c("freq","intns","prop"))
+rice_labbeller_reset <- 
+  c("Early Rice","Single Rice", "Late Rice") %>% 
+  set_names(c("early","single","late"))
+
+# pal_func <- \(x) {c("#66accf","#bbd971","#5ca141","#eec024","#fe8100","#cd0102")}
+# pal_func <- \(x) {c('#440154','#31688e',"#21908c",'#35b779','#8fd744','#fde725')}
+pal_func <- \(x) {c("#66accf",'#ffffb2','#fecc5c','#fd8d3c','#f03b20','#bd0026')}
+
+background_color <- "gray85"
+```
+
+
+```{r}
+main_sub_map <- function(type_var, period_var,
+                          background_color = "#ECECEC") {
+  
+  base_map <- 
+    # classicChinaMap::base_map_plot(province = TRUE)+
+    ggplot()+
+    geom_sf(data = classicChinaMap::boundary_province %>%
+              filter(name != "海南省"), 
+            fill = background_color) +
+    geom_sf(data = classicChinaMap::boundary_seashore,
+            fill = background_color,color = "#a2c2de")+
+    geom_sf(data = classicChinaMap::boundary_land %>%
+              filter(gap==3),
+            color = NA, fill = "#c3c1d1")+
+    geom_sf(data = classicChinaMap::boundary_land %>%
+              filter(gap==2), color = NA, fill = "#b1add3")+
+    geom_sf(data = classicChinaMap::boundary_land %>%
+              filter(gap==1), color = "black", fill ="black",size=0.5)+
+    geom_point(aes(X,Y,color = pct_slope,
+                   shape = significance,size = significance),
+               #  size = 3,
+               data = res2 %>% 
+                 filter(index == type_var, 
+                        type == period_var) %>% 
+                 arrange(significance))+
+    ggplot2::theme_bw()+
+    scale_shape_manual(values = c(19,17), # 10 or 17
+                       breaks = c(TRUE,FALSE),
+                       labels = c("p<0.05","others"))+
+    scale_size_manual(values = c(4.5,3),
+                      breaks = c(TRUE,FALSE),
+                      labels = c("p<0.05","others"))+
+    binned_scale(aesthetics = "color",
+                 scale_name = "stepsn", 
+                 palette= pal_func,
+                 breaks = c(0,0.005,0.01,0.015,0.02),
+                 limits = c(-1,1),
+                 show.limits = FALSE, 
+                 position = "left",
+                 guide = "colorsteps",
+                 labels = scales::label_percent())+
+    theme(text = element_text(family = "serif"))
+  
+  main_map <- base_map+
+    # annotate("point", x = -Inf, y = Inf, size = 25,
+    #          color = background_color)+
+    # annotate("text", x = -Inf, y = Inf, size = 5,
+    #          hjust = -.1, vjust = 1.1,
+    #          label = label_tbl[[ type_var, period_var ]])+
+    ggplot2::coord_sf(ylim = whole_map_range$ylim,
+                      xlim = whole_map_range$xlim,
+                      expand = FALSE) + 
+    labs(x = rice_labbeller_reset[[period_var]], 
+         y = type_labbeller_reset[[type_var]],
+         color = "Relative Slope",
+         shape = "Significance", size = "Significance")+
+    theme(axis.title.x = element_text(size = 15),
+          axis.title.y = element_text(size = 15),
+          legend.text = element_text(size = 10))
+  
+  if(period_var != "single") {
+    main_map <- main_map+ 
+      theme(axis.ticks.y = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title.y = element_blank())
+  }
+  
+  if(type_var != "prop") {
+    main_map <- main_map+ 
+      theme(axis.ticks.x = element_blank(),
+            axis.text.x = element_blank(),
+            axis.title.x = element_blank())
+  }
+  
+  if (period_var == "single") {
+    sub_map <- base_map+
+      ggplot2::coord_sf(ylim = sub_map_range$ylim,
+                        xlim = sub_map_range$xlim,
+                        expand = FALSE)+
+      labs(x = "", y = "")+
+      theme_void()+
+      theme(legend.position = "none",
+            panel.background = element_rect(fill = "white"),
+            panel.border = element_rect(fill = NA, linewidth = 0.5),
+            axis.line.x = element_line(linewidth = 0.65),
+            axis.line.y = element_line(linewidth = 0.65))
+  } else {
+    sub_map = NULL
+  }
+  
+  
+  return(list(main_map = main_map, sub_map = sub_map))
+}
+row_plot <- function(type) {
+  main_sub_map(type, "single")$main_map +
+    patchwork::inset_element(
+      main_sub_map(type, "single")$sub_map,
+      (1-w * .65),(1-h),1,1
+    ) +
+    main_sub_map(type, "early")$main_map +
+    main_sub_map(type, "late")$main_map 
+}
+```
+
+```{r}
+ggsave(
+  here::here("plot/04whole_map_ch.jpg"),
+  plot = row_plot("freq")/row_plot("intns")/row_plot("prop")+
+    patchwork::plot_layout(guides = "collect"),
+  width = 10,height = 6, dpi = 300)
+```
+

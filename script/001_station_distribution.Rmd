@@ -1,0 +1,135 @@
+---
+title: "station distribution"
+author: "sToney"
+date: "2023-05-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(sf)
+library(patchwork)
+theme_set(theme_minimal())
+```
+
+```{r}
+library(terra)
+library(tidyterra)
+library(ggnewscale)
+rice_ratio <- rast(here::here("data/rice_ratio/rice_ratio.tif")) %>% 
+  mutate(rice_ratio = case_when(
+    rice_ratio == 0 ~ "0",
+    rice_ratio > 0 & rice_ratio <=.05 ~ "(0,5%]",
+    rice_ratio > 0.05 & rice_ratio <=.1 ~ "(5%,10%]",
+    rice_ratio > 0.1 & rice_ratio <=.3 ~ "(10%,30%]",
+    rice_ratio > 0.3 & rice_ratio <=.6 ~ "(30%,60%]",
+    TRUE ~ "0"
+  )) %>% 
+  mutate(rice_ratio = factor(
+    rice_ratio,
+    levels = rev(c("(30%,60%]","(10%,30%]","(5%,10%]","(0,5%]","0"))))
+
+station  <- 
+  read_csv(here::here("data/drought_index.csv")) %>% 
+  mutate(type = factor(type, levels = c("single","early","late"))) %>% 
+  distinct(station, type) %>% 
+  left_join(read_csv(here::here("data/station.csv")) %>% 
+              st_as_sf(coords = c("lon","lat"), crs = 4326) %>% 
+              st_transform(classicChinaMap::shared_crs) %>% 
+              bind_cols(st_coordinates(.)) %>% 
+              st_drop_geometry(), by = "station") %>% 
+  filter(type != "late") 
+
+
+library(classicChinaMap)
+library(cowplot)
+colorbar_1_plot <-  classicChinaMap::boundary_islands %>% 
+  ggplot()+
+  geom_spatraster(data = rice_ratio)+
+  scale_fill_manual(values =
+                    c("#ffffff","#d9f0f1","#92ddf0","#6191f3","#1d40f2"),
+                    na.value = "transparent",
+                    breaks = rev(c("(30%,60%]","(10%,30%]","(5%,10%]","(0,5%]","0")),
+labels = rev(c("(30%,60%]","(10%,30%]","(5%,10%]","(0,5%]","0"))) +
+  theme(
+    legend.key = element_rect(color = "black"))
+colorbar_1 <- cowplot::get_legend(colorbar_1_plot)
+colorbar_2_plot <- ggplot()+
+   geom_sf(aes(color = type),
+          size = 3,
+          data = station %>% 
+            st_as_sf(coords = c("X","Y"),
+                     crs = classicChinaMap::shared_crs))+
+  scale_color_manual(labels = c("Single Cropping Rice",
+                                "Double Cropping Rice"),
+                     values = c("red2","#fecc5c"),
+                     breaks = c("single","early"))+
+  theme(text = element_text(family = "serif",size = 12),
+        legend.position = "bottom") 
+colorbar_2 <-   cowplot::get_legend(colorbar_2_plot)
+
+p0 <- 
+  classicChinaMap::boundary_islands %>% 
+  ggplot()+
+  geom_spatraster(data = rice_ratio,show.legend = FALSE)+
+  scale_fill_manual(values =
+                    c("#ffffff","#d9f0f1","#92ddf0","#6191f3","#1d40f2"),
+                    na.value = "transparent",
+                    breaks = rev(c("(30%,60%]","(10%,30%]","(5%,10%]","(0,5%]","0")),
+labels = rev(c("(30%,60%]","(10%,30%]","(5%,10%]","(0,5%]","0")))+
+ 
+  geom_sf(data = filter(boundary_province, name != "海南省"), fill = NA)+
+  geom_sf(data = boundary_seashore, fill = NA,color = "#a2c2de")+
+  # land boundary
+  geom_sf(data = filter(boundary_land,gap==3),color = NA, fill = "#c3c1d1")+
+  geom_sf(data = filter(boundary_land,gap==2), color = NA, fill = "#b1add3")+
+  geom_sf(data = filter(boundary_land,gap==1), color = "black", fill ="black",size=0.5)+
+  geom_sf(aes(color = type),
+          size = 3,
+          data = station %>% 
+            st_as_sf(coords = c("X","Y"),
+                     crs = classicChinaMap::shared_crs))+
+  scale_color_manual(labels = c("Single Cropping Rice",
+                                "Double Cropping Rice"),
+                     values = c("red2","#fecc5c"),
+                     breaks = c("single","early"))+
+  classicChinaMap::base_map_scalebar(3.5)+
+  classicChinaMap::base_map_theme()+
+  labs(color = "",fill = "水稻种植比例")+
+  theme(text = element_text(family = "serif",size = 12),
+        legend.position = "bottom")+
+  patchwork::inset_element(
+    classicChinaMap::sub_map(8),
+    left = 0.80,
+    bottom = 0,
+    right = 1,
+    top = 0.5,
+    align_to="plot") +
+  patchwork::inset_element(
+    classicChinaMap::north_arrow,
+    left = 0.93,
+    bottom = 0.87,
+    right = 0.97,
+    top = 0.98
+  )
+
+p1 <- cowplot::plot_grid(colorbar_1,p0,ncol = 2,
+                   rel_widths = c(0.3,1.8))
+
+```
+
+```{r}
+# without color bar
+ggsave(
+  here::here("plot/00station01.jpg"),
+  plot = p0,
+  width = 8,height = 6,dpi = 300
+)
+# with color bar
+ggsave(
+  here::here("plot/00station02.jpg"),
+  plot = p1,
+  width = 10,height = 6,dpi = 300
+)
+```
+

@@ -1,0 +1,182 @@
+---
+title: "average map"
+author: "sToney"
+date: "2023-05-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(sf)
+library(patchwork)
+theme_set(theme_minimal())
+```
+
+```{r}
+station <- read_csv(here::here("data/station.csv")) %>% 
+  st_as_sf(coords = c("lon","lat"), crs = 4326) %>% 
+  st_transform(classicChinaMap::shared_crs) %>% 
+  bind_cols(st_coordinates(.)) %>% 
+  st_drop_geometry()
+
+per_index <- read_rds(here::here("data/drought_index_per_phenology.rds"))
+total_summarise_map <- map(1:9,\(i){
+  # per_index[[i]] %>% 
+   dir("C:\\Program Files\\R_scripts\\agri_analysis\\graduate\\data\\drought_index_per_phenology",
+       full.names = TRUE) %>% 
+    pluck(i) %>% 
+    read_csv() %>% 
+    set_names(c("station","period","year",
+                str_c(c("edd","gdd","n_edd","n_gdd","total_days"),"_",i)))
+}) %>% 
+  reduce(dplyr::left_join, by = join_by(station, period, year)) %>% 
+  rowwise() %>% 
+  transmute(
+    station, period, year,
+    edd = sum(c_across(starts_with("edd_"))),
+    gdd = sum(c_across(starts_with("gdd_"))),
+    n_edd = sum(c_across(starts_with("n_edd_"))),
+    n_gdd = sum(c_across(starts_with("n_gdd_"))),
+    total_days = sum(c_across(starts_with("total_days_")))
+  ) %>% 
+  mutate(
+    freq = n_edd / n_gdd,
+    intns = if_else(edd==0,0, edd/n_edd),
+    prop =  edd / gdd
+  ) %>% 
+  group_by(station, period) %>% 
+  summarise(
+    freq = mean(freq),
+    intns = mean(intns),
+    prop = mean(prop),
+    .groups = "drop"
+  ) %>% 
+  pivot_longer(freq:prop,names_to = "type") %>% 
+  left_join(station, by = "station")
+```
+
+
+```{r}
+label_tbl <- crossing(
+  type = c("freq","intns","prop"),
+  period = factor(c("mid","early","late"),
+                  levels = c("mid","early","late"))) %>% 
+  mutate(id = 1:9, id = paste0("(",id,")")) %>% 
+  pivot_wider(names_from = "period", values_from = "id") %>% 
+  column_to_rownames(var = "type")
+
+whole_map_range <- list(
+  ylim = c(-1043564, 417510),
+  xlim = c(-1304054 , 917510)) 
+sub_map_range <- list(
+  ylim = c(1306915,1894565),
+  xlim = c(1173677, 1609149)
+)
+asp2 <- 
+  (sub_map_range$xlim[[2]] - sub_map_range$xlim[[1]])/
+  (sub_map_range$ylim[[2]] - sub_map_range$ylim[[1]])
+
+w <-  0.3 
+h <- w / asp2
+
+type_labbeller_reset <- 
+  c("Frequency","Intensity","Proportion") %>% 
+  set_names(c("freq","intns","prop"))
+rice_labbeller_reset <- 
+  c("Early Rice","Single Rice", "Late Rice") %>% 
+  set_names(c("early","mid","late"))
+type_palette <- list(
+  "freq" = scale_color_viridis_b(breaks = seq(0.006,0.011,0.001),
+                                 limits = c(0.003,0.014),
+                                 labels = scales::label_percent()),
+  "intns" =  scale_color_viridis_b(breaks = seq(0.4,0.9,0.1),
+                                   limits = c(0.02,1.1)),
+  "prop" = scale_color_viridis_b(breaks = seq(0.0003,0.0008,0.0001),
+                                 limits = c(0.0002,0.0009),
+                                 labels = scales::label_percent())
+)
+```
+
+```{r}
+main_sub_map <- function(type_var, period_var) {
+  
+  base_map <- classicChinaMap::base_map_plot(province = TRUE)+
+    geom_point(aes(X,Y,color = value),
+               size = 3,
+               data = total_summarise_map %>% 
+                 filter(type == type_var, 
+                        period == period_var))+
+    ggplot2::theme_bw()+
+    theme(text = element_text(family = "serif"))
+  
+  main_map <- base_map+
+    # annotate("point", x = -Inf, y = Inf, size = 25,
+    #          color = "white")+
+    # annotate("text", x = -Inf, y = Inf, size = 5,
+    #          hjust = -.1, vjust = 1.1,
+    #          label = label_tbl[[ type_var, period_var ]])+
+    ggplot2::coord_sf(ylim = whole_map_range$ylim,
+                      xlim = whole_map_range$xlim,
+                      expand = FALSE) + 
+    labs(x = rice_labbeller_reset[[period_var]], 
+         y = type_labbeller_reset[[type_var]],
+         color = "")+
+    theme(axis.title.x = element_text(size = 15),
+          axis.title.y = element_text(size = 15),
+          legend.text = element_text(size = 10),
+          legend.box.just = "left")
+  
+  if(period_var != "mid") {
+    main_map <- main_map+ 
+      theme(axis.ticks.y = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title.y = element_blank())
+  }
+  
+  if(type_var != "prop") {
+    main_map <- main_map+ 
+      theme(axis.ticks.x = element_blank(),
+            axis.text.x = element_blank(),
+            axis.title.x = element_blank())
+  }
+  
+  if (period_var == "mid") {
+    sub_map <- base_map+
+      ggplot2::coord_sf(ylim = sub_map_range$ylim,
+                        xlim = sub_map_range$xlim,
+                        expand = FALSE)+
+      labs(x = "", y = "")+
+      theme_void()+
+      theme(legend.position = "none",
+            panel.background = element_rect(fill = "white"),
+            panel.border = element_rect(fill = NA, linewidth = 0.5),
+            axis.line.x = element_line(linewidth = 0.65),
+            axis.line.y = element_line(linewidth = 0.65))
+  } else {
+    sub_map = NULL
+  }
+  
+  
+  return(list(main_map = main_map, sub_map = sub_map))
+}
+
+row_plot <- function(type) {
+  main_sub_map(type, "mid")$main_map + type_palette[[type]] +
+    patchwork::inset_element(
+      main_sub_map(type, "mid")$sub_map + type_palette[[type]],
+      (1-w * .65),(1-h),1,1
+    ) +
+    main_sub_map(type, "early")+type_palette[[type]] +
+    main_sub_map(type, "late")+type_palette[[type]] +
+    patchwork::plot_layout(guides = "collect")
+}
+
+
+```
+
+```{r}
+ggsave(here::here("plot/02ave_map_ch.jpg"),
+       plot = row_plot("freq")/row_plot("intns")/row_plot("prop"),
+       width = 10,height = 6, dpi = 300)
+```
+

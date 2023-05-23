@@ -1,0 +1,107 @@
+---
+title: "trend test"
+author: "sToney"
+date: "2023-05-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(patchwork)
+theme_set(theme_minimal())
+```
+
+
+
+```{r}
+
+
+mk_slope_rel <- function(x) {
+  len <- length(x)
+  fifth <- ceiling(len/5)
+  xbeg <- x[1:fifth]
+  xend <- x[(len - fifth + 1):len]
+  miss <- (fifth^2 - sum(!is.na(xbeg)) * sum(!is.na(xend)))/fifth^2
+  y <- x[!is.na(x)]
+  t <- time(x)[!is.na(x)]
+  outr <- outer(y, y, "-")/outer(t, t, "-")
+  outr.rel <- sweep(outr, 2, y, "/")
+  sen.slope.rel <- median(outr.rel[lower.tri(outr.rel)],na.rm = TRUE)  
+  return(sen.slope.rel)
+}
+extreme_per_stage <- 
+  # read_csv(here::here("data/drought_index.csv")) %>% 
+  read_csv("C:\\Program Files\\R_scripts\\agri_analysis\\graduate\\data\\drought_index.csv") %>% 
+  mutate(type = factor(type, levels = c("single","early","late")))
+
+
+long_tbl <- extreme_per_stage  %>% 
+  select(station, type, year, stage, freq, intns, prop) %>% 
+  group_by(type, year,stage) %>% 
+  summarise(across(freq:prop, \(x) mean(x, na.rm = TRUE)),
+            .groups = "drop") %>% 
+  pivot_longer(freq:prop, names_to = "index") %>% 
+  group_by(type, stage, index) 
+
+minmax <- \(x) {max(x) - min(x)}
+
+res <- group_keys(long_tbl) %>% 
+  bind_cols(
+    long_tbl %>% 
+      group_split() %>% 
+      map_dfr(\(tbl){
+        mk_test_1 <- tbl %>% pull(value) %>% modifiedmk::tfpwmk()
+        tibble(p_value = mk_test_1[["P-value"]],
+               slope = mk_test_1[["Sen's Slope"]],
+               minmax = minmax(tbl %>% pull(value))
+        )
+      })
+  )%>% 
+  mutate(p_star = case_when(
+    p_value <= 0.001 ~ "***",
+    p_value <= 0.01 ~ "**",
+    p_value <= 0.05 ~ "*",
+    TRUE ~ ""
+  )) %>% 
+  mutate(pct_slope = slope / minmax)
+
+# res %>% write_csv(here::here("table/03_trend.csv"))
+panel_names <- c("Frequency","Intensity","Proportion") %>% 
+  set_names(c('freq','intns','prop'))
+p <- res %>% 
+  # filter(index=="intns") %>% 
+  mutate(stage_place = as.numeric(fct_inorder(stage)),
+         type_place =  as.numeric(type)-2) %>% 
+  mutate(place = stage_place + 0.3 * type_place) %>% 
+  ggplot(aes(stage, pct_slope))+
+  geom_col(aes(fill = type),position = position_dodge(0.9))+
+  geom_text(aes(x = place,label = p_star), nudge_y =0.0005)+
+  # geom_text(data = tibble(label = letters[1:3], 
+  #                         index = factor(c("freq","intns","prop"),levels = c("freq","intns","prop"))),
+  #           aes(x = -Inf, y = Inf, label = label),
+  #           size = 5,
+  #           hjust = -1.5,
+  #           vjust = 1.4,
+  #           inherit.aes = FALSE)+
+  facet_wrap(vars(index), ncol = 1, strip.position = "left",
+             labeller = as_labeller(panel_names))+
+  scale_x_discrete(labels = c("Overall",paste0("Period ",1:9)))+
+  scale_y_continuous(labels = scales::label_percent(),
+                     breaks = c(0,0.005,0.01,0.015,0.02),
+                     limits = c(0,0.024),
+                     expand = c(0,0))+
+  # facet_wrap(vars(type), ncol = 3)+
+  theme_bw()+
+  ggthemes::scale_fill_tableau(labels = paste0(c("Single","Early","Late")," Rice"))+
+  labs(fill = "",y = "",x="")+
+  theme(text = element_text(family = "serif"),
+        strip.placement = "outside",
+        strip.background =element_rect(fill="white",color = "white"),
+        strip.text.y.left = element_text(angle = 0),
+        axis.ticks.x = element_blank())
+ggsave(here::here("plot/03trend_test_ch.jpg"),
+       plot = p,
+       width = 9,height = 5,dpi = 300)
+
+```
+

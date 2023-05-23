@@ -55,9 +55,9 @@ gam_output_reduce <- function(phenology_interpolation_res) {
     relocate(emergence:milk, .before = mature) 
 }
 
-phenology_read_transform <- function() {
-  here::here("data/0_basic/phenology.csv") %>% 
-    read_csv() %>% rowwise() %>% 
+phenology_transform <- function(tbl) {
+  tbl %>% 
+    rowwise() %>% 
     mutate(na_filter = sum(is.na(c_across(seedling:mature)))) %>% 
     filter(na_filter < 7) %>% 
     as_tibble() %>% 
